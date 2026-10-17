@@ -97,7 +97,7 @@ struct event {
         unsigned long long int seqnum;
         const char *devpath;
         const char *devpath_old;
-        const char *devnode;
+        char *devnode;
         dev_t devnum;
         int ifindex;
         bool is_block;
@@ -140,6 +140,7 @@ static void event_free(struct event *event) {
         udev_list_node_remove(&event->node);
         udev_device_unref(event->dev);
         udev_device_unref(event->dev_kernel);
+        free(event->devnode);
 
         if (event->worker)
                 event->worker->event = NULL;
@@ -495,7 +496,18 @@ static int event_queue_insert(struct udev_device *dev) {
         event->seqnum = udev_device_get_seqnum(dev);
         event->devpath = udev_device_get_devpath(dev);
         event->devpath_old = udev_device_get_devpath_old(dev);
-        event->devnode = udev_device_get_devnode(dev);
+        /* Keep our own copy of the DEVNAME the event arrived with: unlike
+         * systemd's sealed sd_device, libudev may re-read the uevent file
+         * later (udev_monitor_send_device() -> udev_device_get_devtype()),
+         * which frees and replaces the device's devnode string. */
+        if (udev_device_get_devnode(dev) != NULL) {
+                event->devnode = strdup(udev_device_get_devnode(dev));
+                if (event->devnode == NULL) {
+                        udev_device_unref(event->dev_kernel);
+                        free(event);
+                        return -1;
+                }
+        }
         event->devnum = udev_device_get_devnum(dev);
         event->is_block = streq("block", udev_device_get_subsystem(dev));
         event->ifindex = udev_device_get_ifindex(dev);
